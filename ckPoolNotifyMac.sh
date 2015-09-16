@@ -15,9 +15,9 @@
 ################################################################################
 
 # Parameters to the script. Change these to your specific email credentials and monitored addresses
-emailUser="edonkey@gmail.com"
-sender="edonkey@gmail.com"
-recipients="edonkey@gmail.com"
+emailUser="edonkeycoin@gmail.com"
+sender="edonkeycoin@gmail.com"
+recipients="edonkeycoin@gmail.com"
 smtpServer="smtp.gmail.com:587"
 workers="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX.edonkeystick"
 users="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX"
