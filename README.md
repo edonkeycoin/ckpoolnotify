@@ -125,7 +125,7 @@ For now, this section discusses how to set up a daemon for Mac OS X. Please foll
 
 5. Copy the “ckPoolNotify” folder to /Library/Application Support. To do this, use this command line (substituting your ckPoolNotify folder path if it’s not in your home directory; you will be asked for your admin credentials to perform the copy):
 
-	sudo cp -rp ~/ckPoolNotify /Library/Application\ Support
+		sudo cp -rp ~/ckPoolNotify /Library/Application\ Support
 
 6. From a Terminal window, enter the following commands:
 
