@@ -51,6 +51,10 @@ gKeyringSystem = "ckPoolNotify"
 
 # Defaults
 gDefaultPoolUrl = "http://solo.ckpool.org"
+gDefaultCkSoloPoolFeeAddress = "1PKN98VN2z5gwSGZvGKS2bj8aADZBkyhkZ"
+
+# Number of minutes between checks to see if a block was found
+gDefaultBlockCheckMinutes = 5
 
 gDefaultDifficultyUrl = "https://blockexplorer.com/q/getdifficulty"
 gDefaultDifficultyJsonKey = "difficulty"
@@ -161,6 +165,45 @@ def getCurrentDifficulty(getDifficultyUrl=gDefaultDifficultyUrl, difficultyKey=g
 	return curDifficulty
 
 #---------------------------------------------------------------------------------------------------
+def wasABlockFound(lastBlock, poolFeeAddress=gDefaultCkSoloPoolFeeAddress):
+	# Initialize the return values
+	newBlock = 0
+	blockFinderAddress = ""
+
+	# Assemble the pool fee address URL. If there's a new input to this address, it means
+	# the pool found a block. Also, the other input will be the block finder's address.
+	poolFeeAddressUrl = "https://blockchain.info/address/" + poolFeeAddress + "?format=json"
+
+	try:
+		if gDebug: print("Looking for a payout to the pool fee address: \"" + poolFeeAddress + "\"")
+		response = requests.get(poolFeeAddressUrl)
+		data = response.json()
+		blockNumberFound = data['txs'][0][u'block_height']
+		
+		if gDebug:
+			print("  Found this block number: " + str(blockNumberFound))
+
+		# HACK TEST to fake out a found block. Leave commented out when not testing.
+		#lastBlock = blockNumberFound - 1
+	
+		# Check to see if this is a new block
+		if blockNumberFound > lastBlock:
+			newBlock = blockNumberFound
+			blockFinderAddress = data['txs'][0][u'out'][0][u'addr']
+			if gDebug:
+				print("  And this block finder: " + blockFinderAddress)
+		elif gDebug:
+			print("    This is not a new block. Bummer...")
+	except requests.exceptions.ConnectionError, e:
+		p("Connection Error. Will retry later.." )
+		status = -2
+	except Exception, e:
+		p("Fetching data failed: %s" % str(e))
+		status = -2
+	
+	return (newBlock, blockFinderAddress)
+
+#---------------------------------------------------------------------------------------------------
 class EmailServer:
 
 	#---------------------------------------------------------------------------
@@ -222,6 +265,7 @@ class SavedStats:
 		# Initialize the member variables with defaults
 		self.path = path
 		self.statsDict = None
+		self.lastBlock = 0
 		self.restore()
 
 		# If we didn't restore a stats dictionary, then instance a new one
@@ -238,8 +282,10 @@ class SavedStats:
 				file.seek(0, 0)
 				unpickled = pickle.load(file)
 				self.statsDict = unpickled["userStats"]
+				if "lastBlock" in unpickled:
+					self.lastBlock = unpickled["lastBlock"]
 				file.close()
-				if gDebug: print("  Saved user stats key/values:" + str(self.statsDict))
+				if gDebug: print("  Restored these stats key/values:" + str(self.statsDict))
 			except Exception, err:
 				print "Exception trying to access the saved saved stats data file:", err
 
@@ -250,7 +296,7 @@ class SavedStats:
 			file = open(self.path, "a+b")
 			file.seek(0, 0)
 			file.truncate()
-			dictToPickle = {"userStats": self.statsDict}
+			dictToPickle = {"userStats": self.statsDict, "lastBlock": self.lastBlock}
 			pickle.dump(dictToPickle, file)
 			file.close()
 		except Exception, err:
@@ -265,25 +311,48 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 	if poolUrls and len(poolUrls > 0):
 		urlsToMonitor.extend(poolUrls)
 	
+	# Initialize an array of monitored addresses. This cache of addresses will be used when
+	# a block is found to see if the winner was one of the monitored addresses.
+	monitoredAddresses = []
+	
 	# Construct any worker URLs
 	if workers and len(workers) > 0:
 		for curWorker in workers:
 			curWorkerUrl = urlparse.urljoin(gDefaultPoolUrl + "/workers/", curWorker)
 			urlsToMonitor.append(curWorkerUrl)
+			
+			# Split off the worker name from the address and add the address to the list
+			# of monitored addresses
+			curWorkerAddress = curWorker.split(".", 1)[0]
+			if curWorkerAddress not in monitoredAddresses:
+				monitoredAddresses.append(curWorkerAddress)
 	
 	# Construct any user URLs
 	if users and len(users) > 0:
 		for curUser in users:
 			curUserUrl = urlparse.urljoin(gDefaultPoolUrl + "/users/", curUser)
 			urlsToMonitor.append(curUserUrl)
+			if curUser not in monitoredAddresses:
+				monitoredAddresses.append(curUser)
 	
 	# We need at least one URL to monitor
 	if len(urlsToMonitor) == 0:
 		exitFail("You need at least one pool URL to monitor.")
 	
+	if gDebug: 
+		print("monitoredAddresses: " + str(monitoredAddresses))
+	
 	# Initialize the dictionary that will keep track of the saved stats. 
 	# First we look to see if we have a saved dictionary of best shares in a file.
 	savedStats = SavedStats(gSavedStatsFilePath)
+		
+	# If we haven't initialized the last block found by the pool, do so now and
+	# save the stats to disk. This way we can detect when a new block has been found.
+	lastFoundBlockCheck = datetime.datetime.now()
+	if savedStats.lastBlock == 0:
+		(savedStats.lastBlock, ignoreAddress) = wasABlockFound(lastBlock=0)
+		if savedStats.lastBlock != 0:
+			savedStats.save()
 		
 	# If any URLs that we wan't to monitor are not in the dictionary, add a skeleton
 	# dictionary for it now with a zero best share.
@@ -330,41 +399,82 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 			if status == 401:
 				print (getNowStr() + ": You are not authorized to access the JSON interface for this URL: " + curUrl)
 		
+		# If it's time to see if the pool found a block, then check now
+		newBlock = 0
+		foundAddress = ""
+		if datetime.datetime.now() >= (lastFoundBlockCheck + datetime.timedelta(minutes = gDefaultBlockCheckMinutes)):
+			if gDebug: p("Checking to see if the pool found a block...")
+			lastFoundBlockCheck = datetime.datetime.now()
+			(newBlock, foundAddress) = wasABlockFound(lastBlock=savedStats.lastBlock)
+			
+			# If we found a new block, remember it in our stats (which will be saved below)
+			if newBlock != 0:
+				savedStats.lastBlock = newBlock
+				
 		# If we have new best shares, notify the user and remember the changed stats.
+		newBestSharesFound = False
 		if newBestShares and (len(newBestShares) > 0):
-			p("New best shares found!")
+			newBestSharesFound = True
+		if (newBlock != 0) or newBestSharesFound:
+			# Save the updated stats
 			savedStats.save()
-		
-			# If we have email text to send, we must have new best shares to crow about. Send the 
-			# email now. Note that we sort the dictionary by URL so that there's a consistent order
-			# in the email.
-			sorted(newBestShares, key=newBestShares.get)
-			
-			# Try to get the current difficulty to include in the email. If we got it, the
-			# value will be non-zero.
-			curDifficulty = getCurrentDifficulty()
-			
+
 			# Build up the body of the email text.
+			subject = "CK Solo Pool: "
 			body = ""
 			
-			# If we know the current difficulty, put it at the top for reference
-			if curDifficulty != 0.0:
-				body = "Current difficulty: " + str(curDifficulty) + "\n"
+			# If a block was found, then add that info the the email notification
+			appendStr = ""
+			if (newBlock != 0) and stringArgCheck(foundAddress):
+				p("New block found: " + str(newBlock))
+				appendStr = " & "
+				subject = subject + "New Block found"
+				body = body + "This lucky address found block number " + str(newBlock) + ":\n\n"
+				body = body + foundAddress + "\n"
+				body = body + "\n"
 				
-			# Loop through the new best shares indicating their stats URL, value, and percentage
-			# of the current difficulty.
-			for key, value in newBestShares.iteritems():
-				if len(body) > 0:
-					body = body + "\n"
-				body = body + "Stats URL: " + key + "\n" + "New best share: " + str(value) + "\n"
-				if (value != 0.0) and (curDifficulty != 0.0):
-					percentOfDifficulty = (value / curDifficulty) * 100
-					body = body + "Percent of current difficulty: " + str(percentOfDifficulty) + "%\n"
+				# If the address that found the block is one of ours, then this is a big day!
+				if foundAddress in monitoredAddresses:
+					body = body + "OMG! That's one of your monitored addresses!\n"
+					body = body + "If it was your address, congratulations! You should go celebrate! Or at least donate to edonkey: 18wQtEDmhur2xAd3oE8qgrZbpCDeuMsdQW\n"
+				else:
+					body = body + "Unfortunately that was not one of your monitored addresses. Better luck next time...\n"
+				body = body + "\n"
+			
+			# If we found new best shares, add that info to the subject and body of the email
+			if newBestSharesFound:
+				p("New best share found!")
+				subject = subject + appendStr + "New best share found"
+				appendStr = " & "
+					
+				# If we have email text to send, we must have new best shares to crow about. Send the 
+				# email now. Note that we sort the dictionary by URL so that there's a consistent order
+				# in the email.
+				sorted(newBestShares, key=newBestShares.get)
+			
+				# Try to get the current difficulty to include in the email. If we got it, the
+				# value will be non-zero.
+				curDifficulty = getCurrentDifficulty()
+			
+				# If we know the current difficulty, put it at the top for reference
+				if curDifficulty != 0.0:
+					body = body + "Current difficulty: " + str(curDifficulty) + "\n"
+				
+				# Loop through the new best shares indicating their stats URL, value, and percentage
+				# of the current difficulty.
+				for key, value in newBestShares.iteritems():
+					if len(body) > 0:
+						body = body + "\n"
+					body = body + "Stats URL: " + key + "\n" + "New best share: " + str(value) + "\n"
+					if (value != 0.0) and (curDifficulty != 0.0):
+						percentOfDifficulty = (value / curDifficulty) * 100
+						body = body + "Percent of current difficulty: " + str(percentOfDifficulty) + "%\n"
 
 			# Send the email.
 			if gDebug or gVerbose: 
 				p("Sending the new best share email...")
-			success = emailServer.send(sender, recipients, "New best share found!", body)
+			subject = subject + "!"
+			success = emailServer.send(sender, recipients, subject, body)
 			if not success:
 				p("  Could not send the new best share email!")
 			elif gDebug or gVerbose:
