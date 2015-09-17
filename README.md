@@ -8,7 +8,9 @@
 
 The ckPoolNotify.py script monitors the CK solo pool, emailing the caller with status changes. 
 
-Currently this script monitors the best shares submitted by specified workers or users. If the best shares improve from historic values saved by this script, an email is sent to the specified recipients.
+Currently this script monitors two events. First, if a block is found then a notification email is sent. If the found block is from any of your monitored addresses, the script congratulates you. Otherwise it wishes you better luck next time.
+
+Second you will receive a notification if the best shares submitted by your specified workers or users has improved from previous values. While past success is no indication of future success, this does provide a little bit of feedback that something is happening. And it's kind of fun to cheer on your miners.
 
 
 ## Installation
