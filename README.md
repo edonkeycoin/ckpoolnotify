@@ -97,7 +97,9 @@ Here’s an example (note that it should be all on one line):
 
 	./ckPoolNotify.py --verbose --server "smtp.gmail.com:587" --user my_email@gmail.com --workers "1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX.edonkeystick" --users "1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX"
 
-Note that you can specify multiple workers or users by using a comma separator. For example: --workers "worker1,worker2,worker3"
+Note that you can specify multiple workers or users by using a comma separator. For example:
+
+	--workers "worker1,worker2,worker3"
 
 If this is the first time you’ve called the script, it will send you an email with the current best shares, then it will “remember” the best shares in a local file. You won’t receive another notification email until there’s a new best share, or if you clear the local storage with the “--clear” command.
 
@@ -123,7 +125,7 @@ For now, this section discusses how to set up a daemon for Mac OS X. Please foll
 
 		rm ~/.ckPoolNotify_SavedStats
 
-4. Test the shell script by dragging the edited ckPoolNotify.sh script to a Terminal window and hitting the return key. The script should run without errors. If it does, wait for it to send the email, then quit the script by hitting command c. At this point, you should have received the notification email.
+4. Test the shell script by dragging the edited ckPoolNotify.sh script to a Terminal window and hitting the return key. The script should run without errors. If it does, wait for it to send the email, then quit the script by hitting control c. At this point, you should have received the notification email.
 
 5. Copy the “ckPoolNotify” folder to /Library/Application Support. To do this, use this command line (substituting your ckPoolNotify folder path if it’s not in your home directory; you will be asked for your admin credentials to perform the copy):
 
