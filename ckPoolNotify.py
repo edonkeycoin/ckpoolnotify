@@ -65,6 +65,18 @@ gDefaultMonitorSleepSeconds = 90
 
 gDefaultDateTimeStrFormat = "%Y-%m-%d %H:%M:%S"
 
+# Boolean expression dictionary
+gBooleanExpressionDict = {
+	"on":		True,
+	"off":		False,
+	"true":		True,
+	"false":	False,
+	"yes":		True,
+	"no":		False,
+	"1":		True,
+	"0":		False,
+}
+
 # Get the name and path to our script
 gScriptPathArg = sys.argv[0]
 gScriptName	 = os.path.basename(gScriptPathArg)
@@ -114,6 +126,36 @@ def p(*args):
 		line = " ".join([line, str(arg)])
 	print line
 	return
+
+#---------------------------------------------------------------------------------------------------
+# Evaluate the specified boolean expression string into a boolean value. Also returns whether or
+# not a valid, known boolean expression string was provided
+def evaluateBoolExpression(boolExpression):
+	expressionValue = False
+	validExpression = False
+	
+	boolExpressionLower = boolExpression.lower()
+	if boolExpressionLower in gBooleanExpressionDict:
+		validExpression = True
+		expressionValue = gBooleanExpressionDict[boolExpressionLower]
+	
+	return (expressionValue, validExpression)
+
+#---------------------------------------------------------------------------------------------------
+# Build up a list of valid expressions dynamically from the dictionary
+def getValidBoolExpresionsStr():
+	validExpressions = ""
+	for key in gBooleanExpressionDict:
+		if len(validExpressions) > 0:
+			validExpressions += ", "
+		validExpressions = validExpressions + key
+	
+	return validExpressions
+
+#---------------------------------------------------------------------------------------------------
+def exitFailBadBooleanExpression(message, badExpression):
+	errorMessage = message + ": \"" + badExpression + "\". Valid boolean expressions include: " + getValidBoolExpresionsStr()
+	exitFail(errorMessage)
 
 #---------------------------------------------------------------------------------------------------
 def setPassword(user, password):
@@ -303,7 +345,7 @@ class SavedStats:
 			print "Exception trying to save the saved stats data file:", err
 
 #---------------------------------------------------------------------------------------------------
-def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, recipients):
+def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True):
 	# Build up a list of URLs to monitor
 	urlsToMonitor = []
 	
@@ -368,27 +410,30 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 		for curUrl in urlsToMonitor:
 			try:
 				if gDebug: print("Monitor attempting to contact this pool URL: " + curUrl)
-				
+			
 				# Get the JSON result from the current URL
 				r = requests.get(curUrl)
 				status = r.status_code
 				r.raise_for_status()
 				data = r.json()
-				
+			
 				if gDebug: print("  JSON returned: " + str(data))
-				
+			
 				# If the best share for the URL is greater than what we remember, then add it
 				# to our dictionary of new best shares, then remember the current value.
-				curBestShare = data['bestshare']
-				savedUrlStatsDict = savedStats.statsDict[curUrl]
-				savedBestShare = savedUrlStatsDict['bestshare']
-				if curBestShare > savedBestShare:
-					if newBestShares == None:
-						newBestShares = {}
-					newBestShares[curUrl] = curBestShare
-				
-					# Remember the new JSON dictionary in out saved stats
-					savedStats.statsDict[curUrl] = data
+				if doBestShareNotification:
+					curBestShare = data['bestshare']
+					savedUrlStatsDict = savedStats.statsDict[curUrl]
+					savedBestShare = savedUrlStatsDict['bestshare']
+					if curBestShare > savedBestShare:
+						if newBestShares == None:
+							newBestShares = {}
+						newBestShares[curUrl] = curBestShare
+			
+						# Remember the new JSON dictionary in out saved stats
+						savedStats.statsDict[curUrl] = data
+				else:
+					if gDebug: print("  Caller has disabled best share notification.")
 			except requests.exceptions.ConnectionError, e:
 				p("Connection Error. Retrying in %i seconds" % sleepSeconds)
 				status = -2
@@ -508,7 +553,7 @@ can run the script in normal monitor mode."""
 
 # Initialize the options parser for this script
 parser = OptionParser(usage=usage, description=description)
-parser.set_defaults(verbose=False, debug=False, server=gDefaultSmptServer, sleepseconds=gDefaultMonitorSleepSeconds, clear=False)
+parser.set_defaults(verbose=False, debug=False, server=gDefaultSmptServer, bestshare=None, sleepseconds=gDefaultMonitorSleepSeconds, clear=False)
 parser.add_option("--verbose",
 	action="store_true", dest="verbose",
 	help="Verbose output from this script, and from wraptool.")
@@ -542,6 +587,9 @@ parser.add_option("-U", "--users",
 parser.add_option("-S", "--sleepseconds",
 	action="store", dest="sleepseconds",
 	help="If specified, then this is the number of seconds to sleep between monitoring events. Defaults to " + str(gDefaultMonitorSleepSeconds) + " seconds.")
+parser.add_option("-b", "--bestshare",
+	action="store", dest="bestshare",
+	help="By default this script notifies receipients if the best share of any monitored workers or users increases. This option allows you to explicitly enable or disable this notification by providing boolean expression including: " + getValidBoolExpresionsStr() + ". For example, this option will disable best share notification: --bestshare \"off\"")
 parser.add_option("-t", "--test",
 	action="store_true", dest="test",
 	help="If specified, then send a test message to the recipients using the senders credentials, then quit. If a password is provided, it will be saved in the current user's keychain.")
@@ -647,5 +695,18 @@ else:
 	if (len(poolUrls) == 0) and (len(workers) == 0) and (len(users) == 0):
 		exitFail("You must specify a worker, user, or pool URL. See the help documentation via --help.")
 	
+	# If a best share notification override was set, then evaluate it now to determine if we're going
+	# to notify for best share increases
+	doBestShareNotification = True
+	if stringArgCheck(options.bestshare):
+		(doBestShareNotification, validExpression) = evaluateBoolExpression(options.bestshare)
+		if not validExpression:
+			exitFailBadBooleanExpression("You provided an invalid boolean expression for the --bestshare option", options.bestshare)
+		if gDebug:
+			if doBestShareNotification:
+				print("Caller has explicitly enabled best share notification.")
+			else:
+				print("Caller has explicitly disabled best share notification.")
+
 	# Start the monitor. This will run forever until the script is quit.
-	monitorPool(poolUrls=poolUrls, workers=workers, users=users, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients)
+	monitorPool(poolUrls=poolUrls, workers=workers, users=users, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification)
