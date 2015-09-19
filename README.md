@@ -105,6 +105,10 @@ If this is the first time you’ve called the script, it will send you an email 
 
 The script will run in a loop forever until you quit it.
 
+Note that if you don't want best share notifications, you can use this override option to disable it:
+
+	--bestshare off
+
 
 ## Daemon Configuration
 
