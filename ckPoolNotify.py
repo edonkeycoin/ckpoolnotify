@@ -47,6 +47,14 @@ gDebug = False
 gVerbose = False
 gQuiet = False
 
+gSeparator = "----------------------------------------------------------------------------------------------------"
+
+# Globals used to test the block finding code. Should be left off unless you're developing or 
+# testing this script
+gDebugPretendWeFoundABlock = False
+gDebugFakeFoundAddress = None
+
+# This system name will appear in the platform keyring.
 gKeyringSystem = "ckPoolNotify"
 
 # Defaults
@@ -225,8 +233,10 @@ def wasABlockFound(lastBlock, poolFeeAddress=gDefaultCkSoloPoolFeeAddress):
 		if gDebug:
 			print("  Found this block number: " + str(blockNumberFound))
 
-		# HACK TEST to fake out a found block. Leave commented out when not testing.
-		#lastBlock = blockNumberFound - 1
+		# HACK TEST to fake out a found block.
+		if gDebugPretendWeFoundABlock:
+			print ("  Pretend we found a block by hacking the last block number.")
+			lastBlock = blockNumberFound - 1
 	
 		# Check to see if this is a new block
 		if blockNumberFound > lastBlock:
@@ -257,10 +267,22 @@ class EmailServer:
 		self.password = password
 
 	#---------------------------------------------------------------------------
-	def send(self, sender, recipients, subject, body):
+	def send(self, sender, recipients, subject, body, printEmail=False):
 		didSend = False
 	
 		recipientList = recipients if type(recipients) is list else [recipients]
+		
+		# If running in verbose mode or if the caller wants us to print the email,
+		# then print it out now
+		if gVerbose or printEmail:
+			print(gSeparator)
+			p("Sending an email:")
+			print("  Sender:  " +  sender)
+			print("  Recipients:  " +  str(recipients))
+			print("  Subject:  " +  subject)
+			print("  Body:\n\n" +  body)
+			print(gSeparator)
+			print("")
 	
 		# Prepare actual message
 		message = email.MIMEMultipart.MIMEMultipart()
@@ -345,7 +367,59 @@ class SavedStats:
 			print "Exception trying to save the saved stats data file:", err
 
 #---------------------------------------------------------------------------------------------------
-def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True):
+def getLastUpdateTimeFromStatsJson(statsJson, localTime=False):
+	# Set default values in case we can't find a given hash rate in the stats
+	lastUpdateTime = None
+
+	try:
+		lastUpdateSecs = statsJson['lastupdate']
+		if localTime:
+			lastUpdateTime = time.localtime(lastUpdateSecs)
+		else:
+			lastUpdateTime = time.gmtime(lastUpdateSecs)
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+
+	return lastUpdateTime
+
+#---------------------------------------------------------------------------------------------------
+def getHashRatesFromStatsJson(statsJson):
+	# Set default values in case we can't find a given hash rate in the stats
+	hashRate5m = "?"
+	hashRate1hr = "?"
+	hashRate1d = "?"
+	hashRate7d = "?"
+	
+	# Get last hash rates out of the specified JSON
+	try:
+		hashRate5m = statsJson['hashrate5m']
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+
+	try:
+		hashRate1hr = statsJson['hashrate1hr']
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+
+	try:
+		hashRate1d = statsJson['hashrate1d']
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+
+	try:
+		hashRate7d = statsJson['hashrate7d']
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+	
+	return (hashRate5m, hashRate1hr, hashRate1d, hashRate7d)
+
+#---------------------------------------------------------------------------------------------------
+def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True, doShowHashRate=True):
 	# Build up a list of URLs to monitor
 	urlsToMonitor = []
 	
@@ -361,7 +435,8 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 	if workers and len(workers) > 0:
 		for curWorker in workers:
 			curWorkerUrl = urlparse.urljoin(gDefaultPoolUrl + "/workers/", curWorker)
-			urlsToMonitor.append(curWorkerUrl)
+			if curWorkerUrl not in urlsToMonitor:
+				urlsToMonitor.append(curWorkerUrl)
 			
 			# Split off the worker name from the address and add the address to the list
 			# of monitored addresses
@@ -373,7 +448,8 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 	if users and len(users) > 0:
 		for curUser in users:
 			curUserUrl = urlparse.urljoin(gDefaultPoolUrl + "/users/", curUser)
-			urlsToMonitor.append(curUserUrl)
+			if curUserUrl not in urlsToMonitor:
+				urlsToMonitor.append(curUserUrl)
 			if curUser not in monitoredAddresses:
 				monitoredAddresses.append(curUser)
 	
@@ -399,7 +475,7 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 	# If any URLs that we wan't to monitor are not in the dictionary, add a skeleton
 	# dictionary for it now with a zero best share.
 	for curUrl in urlsToMonitor:
-		if not curUrl in savedStats.statsDict:
+		if curUrl not in savedStats.statsDict:
 			savedStats.statsDict[curUrl] = { "bestshare": 0.0 }
 	
 	# Main monitor loop
@@ -446,16 +522,29 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 		
 		# If it's time to see if the pool found a block, then check now
 		newBlock = 0
-		foundAddress = ""
+		foundAddress = None
+		foundAddressIsOneOfOurs = False
 		if datetime.datetime.now() >= (lastFoundBlockCheck + datetime.timedelta(minutes = gDefaultBlockCheckMinutes)):
 			if gDebug: p("Checking to see if the pool found a block...")
 			lastFoundBlockCheck = datetime.datetime.now()
 			(newBlock, foundAddress) = wasABlockFound(lastBlock=savedStats.lastBlock)
+
+			# HACK TEST to fake out a found block.
+			if gDebugPretendWeFoundABlock:
+				if gDebugFakeFoundAddress:
+					print ("  Pretend we found a block by changing the found address to this test address: " + gDebugFakeFoundAddress)
+					foundAddress = gDebugFakeFoundAddress
+				else:
+					print ("  Pretend we found a block by changing the found address to one of our monitored ones.")
+					foundAddress = monitoredAddresses[0]
 			
-			# If we found a new block, remember it in our stats (which will be saved below)
+			# If a new block was found, remember it in our stats (which will be saved below)
 			if newBlock != 0:
 				savedStats.lastBlock = newBlock
-				
+		
+		# Keep track of email sections so that we can separate them
+		emailSectionCount = 0
+		
 		# If we have new best shares, notify the user and remember the changed stats.
 		newBestSharesFound = False
 		if newBestShares and (len(newBestShares) > 0):
@@ -473,30 +562,46 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 			if (newBlock != 0) and stringArgCheck(foundAddress):
 				p("New block found: " + str(newBlock))
 				appendStr = " & "
+				if gDebugPretendWeFoundABlock:
+					subject = "TEST - " + subject
+
 				subject = subject + "New Block found"
+				
+				# Add a section separator as needed.
+				if emailSectionCount != 0:
+					body = body + "\n" + gSeparator + "\n"
+				emailSectionCount = emailSectionCount + 1
+				
+				if gDebugPretendWeFoundABlock:
+					body = body + "IMPORTANT! A block was NOT actually found. This email is just a test.\n"
+					body = body + "\n"
+					
+				# Build up the block found section of the email
 				body = body + "This lucky address found block number " + str(newBlock) + ":\n\n"
 				body = body + foundAddress + "\n"
 				body = body + "\n"
 				
 				# If the address that found the block is one of ours, then this is a big day!
 				if foundAddress in monitoredAddresses:
-					body = body + "OMG! That's one of your monitored addresses!\n"
-					body = body + "If it was your address, congratulations! You should go celebrate! Or at least donate to edonkey: 18wQtEDmhur2xAd3oE8qgrZbpCDeuMsdQW\n"
+					foundAddressIsOneOfOurs = True
+					body = body + "OMG! That's one of your monitored addresses!\n\n"
+					body = body + "If it was your address, congratulations! You should go celebrate!\n"
 				else:
 					body = body + "Unfortunately that was not one of your monitored addresses. Better luck next time...\n"
-				body = body + "\n"
-			
+							
 			# If we found new best shares, add that info to the subject and body of the email
 			if newBestSharesFound:
 				p("New best share found!")
 				subject = subject + appendStr + "New best share found"
 				appendStr = " & "
 					
-				# If we have email text to send, we must have new best shares to crow about. Send the 
-				# email now. Note that we sort the dictionary by URL so that there's a consistent order
-				# in the email.
-				sorted(newBestShares, key=newBestShares.get)
-			
+				# Add a section separator as needed.
+				if emailSectionCount != 0:
+					body = body + "\n" + gSeparator + "\n"
+				emailSectionCount = emailSectionCount + 1
+
+				body = body + "New best share stats for monitored addresses:\n\n"
+
 				# Try to get the current difficulty to include in the email. If we got it, the
 				# value will be non-zero.
 				curDifficulty = getCurrentDifficulty()
@@ -506,20 +611,93 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 					body = body + "Current difficulty: " + str(curDifficulty) + "\n"
 				
 				# Loop through the new best shares indicating their stats URL, value, and percentage
-				# of the current difficulty.
-				for key, value in newBestShares.iteritems():
+				# of the current difficulty. Sort the URLs in the dictionary so that there's a consistent order
+				# in the email.
+				sortedBestSharesUrls = sorted(newBestShares)
+				for curUrl in sortedBestSharesUrls:
+					curValue = newBestShares[curUrl]
 					if len(body) > 0:
 						body = body + "\n"
-					body = body + "Stats URL: " + key + "\n" + "New best share: " + str(value) + "\n"
-					if (value != 0.0) and (curDifficulty != 0.0):
-						percentOfDifficulty = (value / curDifficulty) * 100
-						body = body + "Percent of current difficulty: " + str(percentOfDifficulty) + "%\n"
+					curStatsAddress = curUrl.split("/")[-1]
+					body = body + "  " + curStatsAddress + ":\n"
+					body = body + "    New best share:        " + str(newBestShares[curUrl]) + "\n"
+					if (curValue != 0.0) and (curDifficulty != 0.0):
+						percentOfDifficulty = (curValue / curDifficulty) * 100
+						body = body + "    Percent of difficulty: " + str(percentOfDifficulty) + "%\n"
 
-			# Send the email.
+			# If the found address is one that we monitor, and if we're supposed to display the
+			# current hash rate, find all the monitored workers or users (by partial match) 
+			# and include their hashrate in the email
+			if doShowHashRate and (foundAddressIsOneOfOurs or newBestSharesFound):
+				# Add a section separator as needed.
+				if emailSectionCount != 0:
+					body = body + "\n" + gSeparator + "\n"
+				emailSectionCount = emailSectionCount + 1
+
+				body = body + "Hash rates of monitored addresses:\n\n"
+				
+				# We want to show the hash rates of the monitored addresses if a block was
+				# found and it was one of our addresses, or if there was a new best share.
+				# Build up a sorted list of URLs or addresses that we care about first.
+				urlsToReport = []
+
+				# Loop through the monitored addresses looking for any match for the found address
+				for curUrl in urlsToMonitor:
+					# Add all monitored URLs that contain the found address to the URL list we
+					# want to report hashrate for.
+					if foundAddress:
+						for curUrl in urlsToMonitor:
+							if foundAddress in curUrl:
+								if curUrl not in urlsToReport:
+									urlsToReport.append(curUrl)
+
+					# Add all best share URLs to the list to report
+					if newBestSharesFound:
+						for key, value in newBestShares.iteritems():
+							if key not in urlsToReport:
+								urlsToReport.append(key)
+										
+					# Sort the list
+					urlsToReport.sort()
+					if gDebug: print("urlsToReport : " + str(urlsToReport))
+											
+				# Get the hash rate for each address in our sorted list and add it to the 
+				# email body
+				for curUrl in urlsToReport:
+					curAddress = curUrl.split("/")[-1]
+					if gDebug:
+						print("Getting hash rates from saved stats for this URL: " + curUrl)
+						print("  and this address: " + curAddress)
+					body = body + "  " + curAddress + ":\n"
+
+					curStatsDict = savedStats.statsDict[curUrl]
+					
+					# Get the last update time from the stats
+					curLastUpdateTimeStr = "Unknown"
+					curLastUpdateTime = getLastUpdateTimeFromStatsJson(curStatsDict)
+					if curLastUpdateTime:
+						curLastUpdateTimeStr = time.strftime('%Y-%m-%d %H:%M:%S', curLastUpdateTime)
+						
+					body = body + "    Date/Time: " + curLastUpdateTimeStr + "\n"
+
+					# Get the hash rates from the saved stats
+					(hashRate5m, hashRate1hr, hashRate1d, hashRate7d) = getHashRatesFromStatsJson(curStatsDict)
+
+					# Add the hashrates to the email body
+					body = body + "    5 minute:  " + hashRate5m + "\n"
+					body = body + "    1 hour:    " + hashRate1hr + "\n"
+					body = body + "    5 day:     " + hashRate1d + "\n"
+					body = body + "    7 days:    " + hashRate7d + "\n"
+						
+					body = body + "\n"
+				body = body + "\n"
+
+			# Send the email. If a block was found for our address, then print the email to
+			# standard out so that we have a record of it in case the email fails to send.
 			if gDebug or gVerbose: 
-				p("Sending the new best share email...")
+				p("Sending the new notification email...")
 			subject = subject + "!"
-			success = emailServer.send(sender, recipients, subject, body)
+			success = emailServer.send(sender, recipients, subject, body, printEmail=foundAddressIsOneOfOurs)
 			if not success:
 				p("  Could not send the new best share email!")
 			elif gDebug or gVerbose:
@@ -553,7 +731,7 @@ can run the script in normal monitor mode."""
 
 # Initialize the options parser for this script
 parser = OptionParser(usage=usage, description=description)
-parser.set_defaults(verbose=False, debug=False, server=gDefaultSmptServer, bestshare=None, sleepseconds=gDefaultMonitorSleepSeconds, clear=False)
+parser.set_defaults(verbose=False, debug=False, server=gDefaultSmptServer, bestshare=None, showhashrate=None, sleepseconds=gDefaultMonitorSleepSeconds, clear=False, fakefoundaddress=None)
 parser.add_option("--verbose",
 	action="store_true", dest="verbose",
 	help="Verbose output from this script, and from wraptool.")
@@ -590,12 +768,18 @@ parser.add_option("-S", "--sleepseconds",
 parser.add_option("-b", "--bestshare",
 	action="store", dest="bestshare",
 	help="By default this script notifies receipients if the best share of any monitored workers or users increases. This option allows you to explicitly enable or disable this notification by providing boolean expression including: " + getValidBoolExpresionsStr() + ". For example, this option will disable best share notification: --bestshare \"off\"")
+parser.add_option("-H", "--showhashrate",
+	action="store", dest="showhashrate",
+	help="By default this script will include the hash rates of any monitored workers or users. This option allows you to explicitly enable or disable including the hash rates providing boolean expression including: " + getValidBoolExpresionsStr() + ". For example, this option will disable hash rate info in notification emails: --showhashrate \"off\"")
 parser.add_option("-t", "--test",
 	action="store_true", dest="test",
 	help="If specified, then send a test message to the recipients using the senders credentials, then quit. If a password is provided, it will be saved in the current user's keychain.")
 parser.add_option("-c", "--clear",
 	action="store_true", dest="clear",
 	help="If specified, then clear any saved history. This will result in finding new best share data and sending a new notification email.")
+parser.add_option("-F", "--fakefoundaddress",
+	action="store", dest="fakefoundaddress",
+	help="If you pass an address via this option, then the script will go into test mode where it will pretend that this address found a block. Within " + str(gDefaultBlockCheckMinutes) + " minutes an email will be sent indicate that this address found a block. This option is for development and testing only.")
 parser.add_option("--debug",
 	action="store_true", dest="debug",
 	help="Turn on debugging output for this script.")
@@ -708,5 +892,25 @@ else:
 			else:
 				print("Caller has explicitly disabled best share notification.")
 
+	# If a show hash rate override was set, then evaluate it now to determine if we're going
+	# to include hash rate info in notification emails
+	doShowHashRate = True
+	if stringArgCheck(options.showhashrate):
+		(doShowHashRate, validExpression) = evaluateBoolExpression(options.showhashrate)
+		if not validExpression:
+			exitFailBadBooleanExpression("You provided an invalid boolean expression for the --showhashrate option", options.showhashrate)
+		if gDebug:
+			if doShowHashRate:
+				print("Caller has explicitly enabled the inclusion of hash rate info in emails.")
+			else:
+				print("Caller has explicitly disabled the inclusion of hash rate info in emails.")
+	
+	# If the caller wants to test the finding of a block, then set the debug block info so that the
+	# monitor will pretend to find a block and sent the corresponding email.
+	if stringArgCheck(options.fakefoundaddress):
+		gDebugPretendWeFoundABlock = True
+		gDebugFakeFoundAddress = options.fakefoundaddress
+		print("This script will pretend that this address found a block: " + gDebugFakeFoundAddress)
+
 	# Start the monitor. This will run forever until the script is quit.
-	monitorPool(poolUrls=poolUrls, workers=workers, users=users, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification)
+	monitorPool(poolUrls=poolUrls, workers=workers, users=users, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification, doShowHashRate=doShowHashRate)
