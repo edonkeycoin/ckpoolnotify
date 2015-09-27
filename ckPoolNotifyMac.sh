@@ -21,6 +21,7 @@ recipients="edonkeycoin@gmail.com"
 smtpServer="smtp.gmail.com:587"
 workers="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX.edonkeystick"
 users="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX"
+listUrls=""
 
 # If non-zero, then run in debug mode, outputting debug information
 debug=0
@@ -98,8 +99,15 @@ if [[ ! -z "${users}" ]]; then
 	[[ 0 -ne $debug ]] && echo "usersOption: $usersOption"
 fi
 
+# If we have URLs to text file lists, build up the workers option to pass to the script
+listUrlsOption=""
+if [[ ! -z "${listUrls}" ]]; then
+	listUrlsOption="--listurls ${listUrls}"
+	[[ 0 -ne $debug ]] && echo "listUrlsOption: $listUrlsOption"
+fi
+
 # Call the script that emails me when new blocks are found
-"${monitorScript}" --verbose --server $smtpServer $emailUserOption --sender $sender --recipients $recipients $workersOption $usersOption
+"${monitorScript}" --verbose --server $smtpServer $emailUserOption --sender $sender --recipients $recipients $workersOption $usersOption $listUrlsOption
 result=$?
 if [[ $result -ne 0 ]]; then
 	fatalError "Got a $result result from: ${monitorScript}"
