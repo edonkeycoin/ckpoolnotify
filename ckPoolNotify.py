@@ -418,8 +418,46 @@ def getHashRatesFromStatsJson(statsJson):
 	
 	return (hashRate5m, hashRate1hr, hashRate1d, hashRate7d)
 
+
 #---------------------------------------------------------------------------------------------------
-def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True, doShowHashRate=True):
+def getUserAndWorkersFromURLs(listUrls):
+	listedUsers = []
+	listedWorkers = []
+	
+	for curListUrl in listUrls:
+		try:
+			if gDebug: print("Attempting to get the user/workers list from this URL: \"" + curListUrl + "\"")
+		
+			# Get the text result from the list URL
+			r = requests.get(curListUrl)
+			listText = r.text
+			if gDebug: print("  Text returned: " + listText)
+	
+			# Split the text into lines, then evaluate each one. Attempts to deal with
+			# URLs as well as simple addresses
+			listLines = listText.splitlines()
+			for curListLine in listLines:
+				curLine = curListLine.strip()
+				if stringArgCheck(curLine):
+					# Ignore the line if it's a comment
+					if curLine[0] != "#":
+						# See if we're dealing with a URL
+						curAddress = curLine.split("/")[-1]
+						if len(curAddress) > 0:
+							if "." in curAddress:
+								listedWorkers.append(curAddress)
+							else:
+								listedUsers.append(curAddress)
+			
+		except requests.exceptions.ConnectionError, e:
+			print("Could not get this user/worker list due to a connection Error:: \"" + curListUrl + "\"")
+		except Exception, e:
+			print("Unexpected exception: %s" % str(e))
+	
+	return (listedUsers, listedWorkers)
+
+#---------------------------------------------------------------------------------------------------
+def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True, doShowHashRate=True):
 	# Build up a list of URLs to monitor
 	urlsToMonitor = []
 	
@@ -452,9 +490,12 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 				urlsToMonitor.append(curUserUrl)
 			if curUser not in monitoredAddresses:
 				monitoredAddresses.append(curUser)
-	
+				
 	# We need at least one URL to monitor
-	if len(urlsToMonitor) == 0:
+	callerProvidedListUrls = True
+	if (listUrls and (len(listUrls) > 0)):
+		callerProvidedListUrls = True
+	if (len(urlsToMonitor) == 0) and not callerProvidedListUrls:
 		exitFail("You need at least one pool URL to monitor.")
 	
 	if gDebug: 
@@ -482,6 +523,37 @@ def monitorPool(poolUrls, workers, users, sleepSeconds, emailServer, sender, rec
 	if gVerbose:
 		p("Monitor starting...")
 	while True:
+		# If the caller provided a URLs to lists of users or workers, then try to get the lists now.
+		if callerProvidedListUrls:
+			(listedUsers, listedWorkers) = getUserAndWorkersFromURLs(listUrls)
+			for curUser in listedUsers:
+				curUserUrl = urlparse.urljoin(gDefaultPoolUrl + "/users/", curUser)
+				if curUserUrl not in urlsToMonitor:
+					urlsToMonitor.append(curUserUrl)
+				if curUser not in monitoredAddresses:
+					monitoredAddresses.append(curUser)
+
+			for curWorker in listedWorkers:
+				curWorkerUrl = urlparse.urljoin(gDefaultPoolUrl + "/workers/", curWorker)
+				if curWorkerUrl not in urlsToMonitor:
+					urlsToMonitor.append(curWorkerUrl)
+			
+				# Split off the worker name from the address and add the address to the list
+				# of monitored addresses
+				curWorkerAddress = curWorker.split(".", 1)[0]
+				if curWorkerAddress not in monitoredAddresses:
+					monitoredAddresses.append(curWorkerAddress)
+
+			# If any URLs that we wan't to monitor are not in the dictionary, add a skeleton
+			# dictionary for it now with a zero best share.
+			for curUrl in urlsToMonitor:
+				if curUrl not in savedStats.statsDict:
+					savedStats.statsDict[curUrl] = { "bestshare": 0.0 }
+		
+			# If after getting the lists we have no URLs to monitor, let the user know.
+			if len(urlsToMonitor) == 0:
+				p("What? The worker list URLs provided did not provide any workers or users.")
+
 		newBestShares = None
 		for curUrl in urlsToMonitor:
 			try:
@@ -762,6 +834,9 @@ parser.add_option("-w", "--workers",
 parser.add_option("-U", "--users",
 	action="store", dest="users",
 	help="If specified, then these users will be monitored on CK's solo pool. If there's more than one, they must be in comma delimited format like this: \"user1,user2\"")
+parser.add_option("-l", "--listurls",
+	action="store", dest="listurls",
+	help="If specified, then these URLs will be used to provide a simple text file of user and worker addresses. If there's more than one URL, they must be in comma delimited formate like this: \"http://url1,http://url2\". The text files referred by the URLs should have one user or worker address per line. You can use this option in combination with the --users or --workers options as desired.")
 parser.add_option("-S", "--sleepseconds",
 	action="store", dest="sleepseconds",
 	help="If specified, then this is the number of seconds to sleep between monitoring events. Defaults to " + str(gDefaultMonitorSleepSeconds) + " seconds.")
@@ -875,9 +950,15 @@ else:
 	if stringArgCheck(options.users):
 		users = options.users.split(",")
 	
+	# If the caller specified URLs that contain a list of workers or users, then split them out
+	# to pass to the monitor function.
+	listurls = []
+	if stringArgCheck(options.listurls):
+		listurls = options.listurls.split(",")
+	
 	# If the caller specified no pools, workers, or users, then we can't do anything
-	if (len(poolUrls) == 0) and (len(workers) == 0) and (len(users) == 0):
-		exitFail("You must specify a worker, user, or pool URL. See the help documentation via --help.")
+	if (len(poolUrls) == 0) and (len(workers) == 0) and (len(users) == 0) and (len(listurls) == 0):
+		exitFail("You must specify a worker, user, pool URL, or monitor list URL. See the help documentation via --help.")
 	
 	# If a best share notification override was set, then evaluate it now to determine if we're going
 	# to notify for best share increases
@@ -913,4 +994,4 @@ else:
 		print("This script will pretend that this address found a block: " + gDebugFakeFoundAddress)
 
 	# Start the monitor. This will run forever until the script is quit.
-	monitorPool(poolUrls=poolUrls, workers=workers, users=users, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification, doShowHashRate=doShowHashRate)
+	monitorPool(poolUrls=poolUrls, workers=workers, users=users, listUrls=listurls, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification, doShowHashRate=doShowHashRate)
