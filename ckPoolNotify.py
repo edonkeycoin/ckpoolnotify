@@ -586,7 +586,8 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 				p("Connection Error. Retrying in %i seconds" % sleepSeconds)
 				status = -2
 			except Exception, e:
-				p("Fetching data failed: %s" % str(e))
+				curStatsAddress = curUrl.split("/")[-1]
+				p("Fetching data for \"" + curStatsAddress + "\" failed: " + str(e))
 				status = -2
 
 			if status == 401:
