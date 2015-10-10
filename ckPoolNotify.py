@@ -390,6 +390,7 @@ def getHashRatesFromStatsJson(statsJson):
 	hashRate1hr = "?"
 	hashRate1d = "?"
 	hashRate7d = "?"
+	shares = "?"
 	
 	# Get last hash rates out of the specified JSON
 	try:
@@ -416,7 +417,13 @@ def getHashRatesFromStatsJson(statsJson):
 		errorStr = "Fetching data failed: " + str(e)
 		p(errorStr)
 	
-	return (hashRate5m, hashRate1hr, hashRate1d, hashRate7d)
+	try:
+		shares = statsJson['shares']
+	except Exception, e:
+		errorStr = "Fetching data failed: " + str(e)
+		p(errorStr)
+	
+	return (hashRate5m, hashRate1hr, hashRate1d, hashRate7d, shares)
 
 
 #---------------------------------------------------------------------------------------------------
@@ -754,13 +761,14 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 					body = body + "    Date/Time: " + curLastUpdateTimeStr + "\n"
 
 					# Get the hash rates from the saved stats
-					(hashRate5m, hashRate1hr, hashRate1d, hashRate7d) = getHashRatesFromStatsJson(curStatsDict)
+					(hashRate5m, hashRate1hr, hashRate1d, hashRate7d, shares) = getHashRatesFromStatsJson(curStatsDict)
 
 					# Add the hashrates to the email body
 					body = body + "    5 minute:  " + hashRate5m + "\n"
 					body = body + "    1 hour:    " + hashRate1hr + "\n"
 					body = body + "    5 day:     " + hashRate1d + "\n"
 					body = body + "    7 days:    " + hashRate7d + "\n"
+					body = body + "    shares:    " + str(shares) + "\n"
 						
 					body = body + "\n"
 				body = body + "\n"
