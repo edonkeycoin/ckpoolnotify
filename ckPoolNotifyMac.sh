@@ -22,6 +22,7 @@ smtpServer="smtp.gmail.com:587"
 workers="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX.edonkeystick"
 users="1JiWuyX94wrCr7JhkAn7x5qNMCEef1KhqX"
 listUrls=""
+notifyTime=""
 
 # If non-zero, then run in debug mode, outputting debug information
 debug=0
@@ -106,8 +107,15 @@ if [[ ! -z "${listUrls}" ]]; then
 	[[ 0 -ne $debug ]] && echo "listUrlsOption: $listUrlsOption"
 fi
 
+# If we have a daily notification time, then add an option to pass to the script
+notifyTimeOption=""
+if [[ ! -z "${notifyTime}" ]]; then
+	notifyTimeOption="--notifytime ${notifyTime}"
+	[[ 0 -ne $debug ]] && echo "notifyTimeOption: $notifyTimeOption"
+fi
+
 # Call the script that emails me when new blocks are found
-"${monitorScript}" --verbose --server $smtpServer $emailUserOption --sender $sender --recipients $recipients $workersOption $usersOption $listUrlsOption
+"${monitorScript}" --verbose --server $smtpServer $emailUserOption --sender $sender --recipients $recipients $workersOption $usersOption $listUrlsOption $notifyTimeOption
 result=$?
 if [[ $result -ne 0 ]]; then
 	fatalError "Got a $result result from: ${monitorScript}"

@@ -464,7 +464,7 @@ def getUserAndWorkersFromURLs(listUrls):
 	return (listedUsers, listedWorkers)
 
 #---------------------------------------------------------------------------------------------------
-def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True, doShowHashRate=True):
+def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, sender, recipients, doBestShareNotification=True, doShowHashRate=True, notifyTime=None):
 	# Build up a list of URLs to monitor
 	urlsToMonitor = []
 	
@@ -526,10 +526,21 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 		if curUrl not in savedStats.statsDict:
 			savedStats.statsDict[curUrl] = { "bestshare": 0.0 }
 	
+	# Initialize the explicit notification date to nothing for now
+	nextNotifyDate = None
+	
 	# Main monitor loop
 	if gVerbose:
 		p("Monitor starting...")
 	while True:
+		# If the caller specified a notification time and we have not yet computed the next date
+		# when we will notify, then compute that now.
+		if notifyTime and not nextNotifyDate:
+			now = datetime.datetime.now()
+			nextNotifyDate = datetime.datetime.combine(now, notifyTime)
+			if nextNotifyDate < now:
+				nextNotifyDate += datetime.timedelta(days=1)
+
 		# If the caller provided a URLs to lists of users or workers, then try to get the lists now.
 		if callerProvidedListUrls:
 			(listedUsers, listedWorkers) = getUserAndWorkersFromURLs(listUrls)
@@ -574,21 +585,24 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 			
 				if gDebug: print("  JSON returned: " + str(data))
 			
+				# Get the stats for the user from the JSON
+				curBestShare = data['bestshare']
+				savedUrlStatsDict = savedStats.statsDict[curUrl]
+				savedBestShare = savedUrlStatsDict['bestshare']
+				
 				# If the best share for the URL is greater than what we remember, then add it
-				# to our dictionary of new best shares, then remember the current value.
-				if doBestShareNotification:
-					curBestShare = data['bestshare']
-					savedUrlStatsDict = savedStats.statsDict[curUrl]
-					savedBestShare = savedUrlStatsDict['bestshare']
-					if curBestShare > savedBestShare:
+				# to our dictionary of new best shares, which we will report to the caller.
+				if curBestShare > savedBestShare:
+					if doBestShareNotification:
 						if newBestShares == None:
 							newBestShares = {}
 						newBestShares[curUrl] = curBestShare
-			
-						# Remember the new JSON dictionary in out saved stats
-						savedStats.statsDict[curUrl] = data
-				else:
-					if gDebug: print("  Caller has disabled best share notification.")
+					else:
+						if gDebug: print("  Caller has disabled best share notification.")
+		
+				# Remember the new JSON dictionary in the saved stats
+				savedStats.statsDict[curUrl] = data
+
 			except requests.exceptions.ConnectionError, e:
 				p("Connection Error. Retrying in %i seconds" % sleepSeconds)
 				status = -2
@@ -625,20 +639,42 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 		# Keep track of email sections so that we can separate them
 		emailSectionCount = 0
 		
+		# If the caller specified a notification date and we've hit it, then we need to
+		# force notification.
+		forceNotify = False
+		if nextNotifyDate:
+			if datetime.datetime.now() >= nextNotifyDate:
+				if gDebug: p("Time to force daily notification: " + str(nextNotifyDate))
+				
+				# Remember that we want to force notification, and zero out the notify
+				# date so that it will be recomputed at the top of the loop.
+				forceNotify = True
+				nextNotifyDate = None
+		
 		# If we have new best shares, notify the user and remember the changed stats.
 		newBestSharesFound = False
 		if newBestShares and (len(newBestShares) > 0):
 			newBestSharesFound = True
-		if (newBlock != 0) or newBestSharesFound:
+		if forceNotify or (newBlock != 0) or newBestSharesFound:
 			# Save the updated stats
 			savedStats.save()
 
 			# Build up the body of the email text.
 			subject = "CK Solo Pool: "
+			appendStr = ""
 			body = ""
 			
+			# If we're forcing notification now, then append to the subject
+			if forceNotify:
+				subject = subject + appendStr + "Daily notification"
+				appendStr = " & "
+			
+			# See if a new block was found
+			newBlockWasFound = False
+			if (newBlock != 0) and stringArgCheck(foundAddress):
+				newBlockWasFound = True				
+			
 			# If a block was found, then add that info the the email notification
-			appendStr = ""
 			if (newBlock != 0) and stringArgCheck(foundAddress):
 				p("New block found: " + str(newBlock))
 				appendStr = " & "
@@ -693,7 +729,7 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 				# Loop through the new best shares indicating their stats URL, value, and percentage
 				# of the current difficulty. Sort the URLs in the dictionary so that there's a consistent order
 				# in the email.
-				sortedBestSharesUrls = sorted(newBestShares)
+				sortedBestSharesUrls = sorted(newBestShares, key=lambda s: s.lower())
 				for curUrl in sortedBestSharesUrls:
 					curValue = newBestShares[curUrl]
 					if len(body) > 0:
@@ -704,11 +740,11 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 					if (curValue != 0.0) and (curDifficulty != 0.0):
 						percentOfDifficulty = (curValue / curDifficulty) * 100
 						body = body + "    Percent of difficulty: " + str(percentOfDifficulty) + "%\n"
-
+			
 			# If the found address is one that we monitor, and if we're supposed to display the
 			# current hash rate, find all the monitored workers or users (by partial match) 
 			# and include their hashrate in the email
-			if doShowHashRate and (foundAddressIsOneOfOurs or newBestSharesFound):
+			if doShowHashRate and (foundAddressIsOneOfOurs or newBestSharesFound or forceNotify):
 				# Add a section separator as needed.
 				if emailSectionCount != 0:
 					body = body + "\n" + gSeparator + "\n"
@@ -723,23 +759,33 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 
 				# Loop through the monitored addresses looking for any match for the found address
 				for curUrl in urlsToMonitor:
-					# Add all monitored URLs that contain the found address to the URL list we
-					# want to report hashrate for.
-					if foundAddress:
+					# If we're doing a daily notification, then all the monitored URLs are
+					# interesting to us.
+					if forceNotify:
 						for curUrl in urlsToMonitor:
-							if foundAddress in curUrl:
-								if curUrl not in urlsToReport:
-									urlsToReport.append(curUrl)
+							if curUrl not in urlsToReport:
+								urlsToReport.append(curUrl)
+					else:
+						# If we get here, we're not doing daily notification, so we have to decide
+						# what URLs we're interested in.
+						#
+						# Add all monitored URLs that contain the found address to the URL list we
+						# want to report hashrate for.
+						if foundAddress:
+							for curUrl in urlsToMonitor:
+								if foundAddress in curUrl:
+									if curUrl not in urlsToReport:
+										urlsToReport.append(curUrl)
 
-					# Add all best share URLs to the list to report
-					if newBestSharesFound:
-						for key, value in newBestShares.iteritems():
-							if key not in urlsToReport:
-								urlsToReport.append(key)
-										
-					# Sort the list
-					urlsToReport.sort()
-					if gDebug: print("urlsToReport : " + str(urlsToReport))
+						# Add all best share URLs to the list to report
+						if newBestSharesFound:
+							for key, value in newBestShares.iteritems():
+								if key not in urlsToReport:
+									urlsToReport.append(key)
+														
+				# Sort the list
+				urlsToReport = sorted(urlsToReport, key=lambda s: s.lower())
+				if gDebug: print("urlsToReport : " + str(urlsToReport))
 											
 				# Get the hash rate for each address in our sorted list and add it to the 
 				# email body
@@ -758,7 +804,7 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 					if curLastUpdateTime:
 						curLastUpdateTimeStr = time.strftime('%Y-%m-%d %H:%M:%S', curLastUpdateTime)
 						
-					body = body + "    Date/Time: " + curLastUpdateTimeStr + "\n"
+					body = body + "    Updated:     " + curLastUpdateTimeStr + "\n"
 
 					# Get the hash rates from the saved stats
 					(hashRate5m, hashRate1hr, hashRate1d, hashRate7d, shares) = getHashRatesFromStatsJson(curStatsDict)
@@ -768,7 +814,7 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 					body = body + "    1 hour:    " + hashRate1hr + "\n"
 					body = body + "    5 day:     " + hashRate1d + "\n"
 					body = body + "    7 days:    " + hashRate7d + "\n"
-					body = body + "    shares:    " + str(shares) + "\n"
+					body = body + "    Shares:    " + str(shares) + "\n"
 						
 					body = body + "\n"
 				body = body + "\n"
@@ -777,10 +823,11 @@ def monitorPool(poolUrls, workers, users, listUrls, sleepSeconds, emailServer, s
 			# standard out so that we have a record of it in case the email fails to send.
 			if gDebug or gVerbose: 
 				p("Sending the new notification email...")
-			subject = subject + "!"
+			if newBlockWasFound:
+				subject = subject + "!"
 			success = emailServer.send(sender, recipients, subject, body, printEmail=foundAddressIsOneOfOurs)
 			if not success:
-				p("  Could not send the new best share email!")
+				p("  Could not send the notification email!")
 			elif gDebug or gVerbose:
 				p("  Email sent!")
 			
@@ -855,6 +902,9 @@ parser.add_option("-b", "--bestshare",
 parser.add_option("-H", "--showhashrate",
 	action="store", dest="showhashrate",
 	help="By default this script will include the hash rates of any monitored workers or users. This option allows you to explicitly enable or disable including the hash rates providing boolean expression including: " + getValidBoolExpresionsStr() + ". For example, this option will disable hash rate info in notification emails: --showhashrate \"off\"")
+parser.add_option("-n", "--notifytime",
+	action="store", dest="notifytime",
+	help="If specified, then a notification email with the stats of the monitored addresses will be sent daily at the specified time on the clock. The time string is specified in local time and takes the form: \"HH:MM\". For example, to receive an notification email every day at 6 AM, you would use this option: --notifytime 6:00")
 parser.add_option("-t", "--test",
 	action="store_true", dest="test",
 	help="If specified, then send a test message to the recipients using the senders credentials, then quit. If a password is provided, it will be saved in the current user's keychain.")
@@ -995,6 +1045,20 @@ else:
 			else:
 				print("Caller has explicitly disabled the inclusion of hash rate info in emails.")
 	
+	# See if the caller wants us to send a daily notification email.
+	notifyTime = None
+	if options.notifytime:
+		try:
+			notifyTimeStruct = time.strptime(options.notifytime, "%H:%M")
+			notifyTime = datetime.time(notifyTimeStruct.tm_hour, notifyTimeStruct.tm_min)
+		except Exception, e:
+			exitFail("Error decoding the time string for the --notifytime option: " + str(e))
+		if gDebug: print("A daily notification time was specified by the caller: " + str(notifyTime))
+		
+		# Daily notification only makes sense if there's something to tell the caller
+		if (doShowHashRate == False):
+			exitFail("The daily notificatin option (--notifytime) cannot be used because you've disabled hash rate notifications.")
+	
 	# If the caller wants to test the finding of a block, then set the debug block info so that the
 	# monitor will pretend to find a block and sent the corresponding email.
 	if stringArgCheck(options.fakefoundaddress):
@@ -1003,4 +1067,4 @@ else:
 		print("This script will pretend that this address found a block: " + gDebugFakeFoundAddress)
 
 	# Start the monitor. This will run forever until the script is quit.
-	monitorPool(poolUrls=poolUrls, workers=workers, users=users, listUrls=listurls, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification, doShowHashRate=doShowHashRate)
+	monitorPool(poolUrls=poolUrls, workers=workers, users=users, listUrls=listurls, sleepSeconds=options.sleepseconds, emailServer=emailServer, sender=sender, recipients=recipients, doBestShareNotification=doBestShareNotification, doShowHashRate=doShowHashRate, notifyTime=notifyTime)
