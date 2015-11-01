@@ -448,16 +448,28 @@ def getUserAndWorkersFromURLs(listUrls):
 				if stringArgCheck(curLine):
 					# Ignore the line if it's a comment
 					if curLine[0] != "#":
-						# See if we're dealing with a URL
-						curAddress = curLine.split("/")[-1]
-						if len(curAddress) > 0:
-							if "." in curAddress:
-								listedWorkers.append(curAddress)
-							else:
-								listedUsers.append(curAddress)
+						# If the line has illegal characters (like might happen when DropBox
+						# fails and returns an HTML formatted error), then consider the whole
+						# file as bad data, clear any found users or workers, and throw an
+						# exception.
+						illegalChars = set('<>')
+						if any((c in illegalChars) for c in curLine):
+							listedUsers = []
+							listedWorkers = []
+							raise ValueError("Ignoring the file at this URL because illegal characters were detected: \"" + curListUrl + "\"")
+						else:
+							# See if we're dealing with a URL
+							curAddress = curLine.split("/")[-1]
+							if len(curAddress) > 0:
+								if "." in curAddress:
+									listedWorkers.append(curAddress)
+								else:
+									listedUsers.append(curAddress)
 			
 		except requests.exceptions.ConnectionError, e:
 			print("Could not get this user/worker list due to a connection Error:: \"" + curListUrl + "\"")
+		except ValueError, e:
+			print("Bad data read: %s" % str(e))
 		except Exception, e:
 			print("Unexpected exception: %s" % str(e))
 	
