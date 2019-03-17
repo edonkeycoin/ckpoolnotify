@@ -1,7 +1,7 @@
 # CK Solo Pool Notification Script — Read Me
 
 ## By edonkey:	September 15, 2015
-## Donations:  	18wQtEDmhur2xAd3oE8qgrZbpCDeuMsdQW
+## Donations:  	36tvf7L5wxCEZfbma5EGuCakjtonfCR7NN
 
 
 ## Introduction
