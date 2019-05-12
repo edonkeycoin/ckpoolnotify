@@ -1,4 +1,4 @@
-#!/usr/bin/env python -u
+#!/usr/bin/env python
 
 """Script used to monitor the CK Solo bitcoin mining pool."""
 
