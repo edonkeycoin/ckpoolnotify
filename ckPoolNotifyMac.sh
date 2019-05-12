@@ -10,7 +10,7 @@
 #
 #	Written by:	edonkey, September 15, 2015
 #
-#	Donations:	18wQtEDmhur2xAd3oE8qgrZbpCDeuMsdQW
+#	Donations:	37HQFRi9qCPaWKmaD4R5F5kbLqHA1yuQyV
 # 
 ################################################################################
 
